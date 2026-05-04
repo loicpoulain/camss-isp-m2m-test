@@ -40,6 +40,14 @@ struct frame_config {
 	uint32_t    height;
 	uint32_t    output_width;   /* 0 = same as width */
 	uint32_t    output_height;  /* 0 = same as height */
+	/* Input crop rectangle (applied on OUTPUT queue via VIDIOC_S_SELECTION).
+	 * All zeros = no crop (use full input frame). */
+	int          crop_left, crop_top;
+	uint32_t     crop_width, crop_height;
+	/* Output compose rectangle (applied on CAPTURE queue via VIDIOC_S_SELECTION).
+	 * All zeros = no compose (fill full output buffer). */
+	int          compose_left, compose_top;
+	uint32_t     compose_width, compose_height;
 	uint32_t    num_frames;
 	const char *input_file;
 	const char *output_file;

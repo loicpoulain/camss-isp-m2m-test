@@ -53,6 +53,8 @@ static void usage(const char *prog)
 		"  -g <pipeline>   GStreamer sink pipeline\n"
 		"  -s <WxH>        Input size  (default: 640x480)\n"
 		"  -S <WxH>        Output size (default: same as input)\n"
+		"  -c <X,Y,WxH>    Input crop rectangle (default: full input frame)\n"
+		"  -C <X,Y,WxH>    Output compose rectangle (default: full output buffer)\n"
 		"  -f <fourcc>     Input fourcc  (default: RGGB)\n"
 		"  -F <fourcc>     Output fourcc (default: NV12)\n"
 		"  -n <count>      Number of frames (default: 1)\n"
@@ -116,7 +118,7 @@ int main(int argc, char *argv[])
 	int do_topology = 0;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "eti:I:o:g:s:S:f:F:n:T:d:r:pP:Rh")) != -1) {
+	while ((opt = getopt(argc, argv, "eti:I:o:g:s:S:c:C:f:F:n:T:d:r:pP:Rh")) != -1) {
 		switch (opt) {
 		case 'e': do_enum     = 1; break;
 		case 't': do_topology = 1; break;
@@ -147,6 +149,34 @@ int main(int argc, char *argv[])
 				cfg.output_height = h;
 			} else {
 				fprintf(stderr, "Invalid output size '%s', use WxH\n", optarg);
+				return 1;
+			}
+			break;
+		}
+		case 'c': {
+			int x = 0, y = 0;
+			unsigned int w = 0, h = 0;
+			if (sscanf(optarg, "%d,%d,%ux%u", &x, &y, &w, &h) == 4) {
+				cfg.crop_left   = x;
+				cfg.crop_top    = y;
+				cfg.crop_width  = w;
+				cfg.crop_height = h;
+			} else {
+				fprintf(stderr, "Invalid crop '%s', use X,Y,WxH\n", optarg);
+				return 1;
+			}
+			break;
+		}
+		case 'C': {
+			int x = 0, y = 0;
+			unsigned int w = 0, h = 0;
+			if (sscanf(optarg, "%d,%d,%ux%u", &x, &y, &w, &h) == 4) {
+				cfg.compose_left   = x;
+				cfg.compose_top    = y;
+				cfg.compose_width  = w;
+				cfg.compose_height = h;
+			} else {
+				fprintf(stderr, "Invalid compose '%s', use X,Y,WxH\n", optarg);
 				return 1;
 			}
 			break;

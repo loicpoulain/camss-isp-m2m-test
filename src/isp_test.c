@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <linux/videodev2.h>
+#include <linux/v4l2-subdev.h>
 
 #include "isp_test.h"
 
@@ -533,11 +534,19 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 		       cfg->width, cfg->height, (char *)&cfg->input_fmt,
 		       out_w, out_h, (char *)&cfg->output_fmt,
 		       cfg->num_frames);
+	if (cfg->crop_width && cfg->crop_height)
+		printf("  Crop:    %ux%u+%d+%d\n",
+		       cfg->crop_width, cfg->crop_height,
+		       cfg->crop_left, cfg->crop_top);
+	if (cfg->compose_width && cfg->compose_height)
+		printf("  Compose: %ux%u+%d+%d\n",
+		       cfg->compose_width, cfg->compose_height,
+		       cfg->compose_left, cfg->compose_top);
 
 	/* Find vnodes */
-	in_vn     = media_find_vnode(pipe, "input");
-	out_vn    = media_find_vnode(pipe, "output");
-	params_vn = media_find_vnode(pipe, "params");
+	in_vn     = media_find_vnode(pipe, "ope_input");
+	out_vn    = media_find_vnode(pipe, "ope_disp_output");
+	params_vn = media_find_vnode(pipe, "ope_params");
 
 	if (!in_vn || !out_vn) {
 		fprintf(stderr, "Could not find input or output vnode\n");
@@ -558,6 +567,24 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 	if (cfg->framerate && vnode_set_framerate(&in_ctx, cfg->framerate) < 0)
 		goto out;
 
+	/* Apply input crop if requested */
+	if (cfg->crop_width && cfg->crop_height) {
+		struct v4l2_selection sel = {
+			.type   = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+			.target = V4L2_SEL_TGT_CROP,
+			.r = { .left   = cfg->crop_left,
+			       .top    = cfg->crop_top,
+			       .width  = cfg->crop_width,
+			       .height = cfg->crop_height },
+		};
+		if (ioctl(in_ctx.fd, VIDIOC_S_SELECTION, &sel) < 0) {
+			fprintf(stderr, "VIDIOC_S_SELECTION (crop): %s\n", strerror(errno));
+			goto out;
+		}
+		printf("  Input crop:   %ux%u+%d+%d\n",
+		       sel.r.width, sel.r.height, sel.r.left, sel.r.top);
+	}
+
 	/* Open and configure output */
 	if (vnode_open_and_set_fmt(&out_ctx, out_vn->devnode,
 				   V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
@@ -566,12 +593,62 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 				   cfg->output_height ? cfg->output_height : cfg->height) < 0)
 		goto out;
 
+	/* Configure disp subdev: set output size and compose placement.
+	 * Pad 0 = sink (pipeline output at crop size, read-only).
+	 * Pad 1 = source (scaled output size).
+	 */
+	{
+		const char *disp_dev = media_find_subdev(pipe, "ope_disp");
+		if (disp_dev) {
+			int disp_fd = open(disp_dev, O_RDWR | O_CLOEXEC);
+			if (disp_fd < 0) {
+				perror("open disp subdev");
+				goto out;
+			}
+			/* Set source pad format = output (compose) size */
+			struct v4l2_subdev_format sfmt = {
+				.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+				.pad   = 1, /* source */
+				.format = {
+					.width  = cfg->output_width  ? cfg->output_width  : cfg->width,
+					.height = cfg->output_height ? cfg->output_height : cfg->height,
+					.code   = 0x2004, /* MEDIA_BUS_FMT_YUYV8_1X16 */
+					.field  = V4L2_FIELD_NONE,
+				},
+			};
+			if (ioctl(disp_fd, VIDIOC_SUBDEV_S_FMT, &sfmt) < 0)
+				perror("VIDIOC_SUBDEV_S_FMT (disp source)");
+			else
+				printf("  Disp output:  %ux%u\n",
+				       sfmt.format.width, sfmt.format.height);
+			/* Set compose placement if requested */
+			if (cfg->compose_width && cfg->compose_height) {
+				struct v4l2_subdev_selection ssel = {
+					.which  = V4L2_SUBDEV_FORMAT_ACTIVE,
+					.pad    = 1, /* source */
+					.target = V4L2_SEL_TGT_COMPOSE,
+					.r = { .left   = cfg->compose_left,
+					       .top    = cfg->compose_top,
+					       .width  = cfg->compose_width,
+					       .height = cfg->compose_height },
+				};
+				if (ioctl(disp_fd, VIDIOC_SUBDEV_S_SELECTION, &ssel) < 0)
+					perror("VIDIOC_SUBDEV_S_SELECTION (compose)");
+				else
+					printf("  Disp compose: %ux%u+%d+%d\n",
+					       ssel.r.width, ssel.r.height,
+					       ssel.r.left, ssel.r.top);
+			}
+			close(disp_fd);
+		}
+	}
+
 	/* Allocate buffers: depth clamped to [1, MAX_PIPELINE_BUFS] */
 	unsigned int depth = cfg->pipeline_depth ? cfg->pipeline_depth : 1;
 
 #ifdef HAVE_GSTREAMER
 	if (cfg->gst_pipeline) {
-		gst = gst_sink_open(out_w, out_h, cfg->output_fmt,
+		gst = gst_sink_open(out_ctx.width, out_ctx.height, cfg->output_fmt,
 				    cfg->framerate, cfg->gst_pipeline);
 		if (!gst)
 			goto out;

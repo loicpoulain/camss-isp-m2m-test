@@ -148,6 +148,71 @@ static int topology_get(int fd, struct isp_pipeline *pipe)
 		pipe->num_vnodes++;
 	}
 
+	/* Discover subdev entities (V4L2 subdevices) */
+	pipe->num_subdevs = 0;
+	for (uint32_t i = 0; i < topo.num_entities; i++) {
+		struct media_v2_entity *e = &entities[i];
+
+		/* Skip video I/O and base entities; keep subdevs */
+		if ((e->function & MEDIA_ENT_F_IO_V4L) == MEDIA_ENT_F_IO_V4L)
+			continue;
+		if (e->function == MEDIA_ENT_F_BASE)
+			continue;
+
+		if (pipe->num_subdevs >= MAX_SUBDEVS)
+			break;
+
+		__typeof__(pipe->subdevs[0]) *sd = &pipe->subdevs[pipe->num_subdevs];
+		sd->entity_id = e->id;
+		strncpy(sd->name, e->name, sizeof(sd->name) - 1);
+
+		/* Resolve interface link -> /dev/v4l-subdevN */
+		for (uint32_t j = 0; j < topo.num_links; j++) {
+			struct media_v2_link *lnk = &links[j];
+			if (!(lnk->flags & MEDIA_LNK_FL_INTERFACE_LINK))
+				continue;
+			if (lnk->sink_id != e->id)
+				continue;
+			for (uint32_t k = 0; k < topo.num_interfaces; k++) {
+				struct media_v2_interface *iface = &ifaces[k];
+				if (iface->id != lnk->source_id)
+					continue;
+				glob_t sg;
+				if (glob("/sys/class/video4linux/v4l-subdev*/dev",
+					 0, NULL, &sg) == 0) {
+					for (size_t vi = 0; vi < sg.gl_pathc; vi++) {
+						FILE *fp = fopen(sg.gl_pathv[vi], "r");
+						if (!fp) continue;
+						char dev_str[16];
+						if (fgets(dev_str, sizeof(dev_str), fp)) {
+							unsigned int maj, min;
+							if (sscanf(dev_str, "%u:%u", &maj, &min) == 2 &&
+							    maj == iface->devnode.major &&
+							    min == iface->devnode.minor) {
+								char sp[128];
+								strncpy(sp, sg.gl_pathv[vi], sizeof(sp)-1);
+								char *sl = strrchr(sp, '/');
+								if (sl) *sl = '\0';
+								const char *nm = strrchr(sp, '/');
+								if (nm)
+									snprintf(sd->devnode,
+										sizeof(sd->devnode),
+										"/dev/%s", nm+1);
+								fclose(fp);
+								break;
+							}
+						}
+						fclose(fp);
+					}
+					globfree(&sg);
+				}
+				break;
+			}
+			break;
+		}
+		pipe->num_subdevs++;
+	}
+
 	ret = 0;
 out:
 	free(entities);
@@ -205,7 +270,8 @@ int media_find_ope_pipeline(struct isp_pipeline *pipe)
 
 void media_pipeline_print(const struct isp_pipeline *pipe)
 {
-	printf("\nPipeline topology (%d video nodes):\n", pipe->num_vnodes);
+	printf("\nPipeline topology (%d video nodes, %d subdevs):\n",
+	       pipe->num_vnodes, pipe->num_subdevs);
 	printf("  %-30s  %-16s  %-8s  %s\n",
 	       "Name", "Device", "Dir", "Type");
 	printf("  %s\n", "--------------------------------------------------------------");
@@ -218,6 +284,13 @@ void media_pipeline_print(const struct isp_pipeline *pipe)
 		       vn->is_output ? "output" : "capture",
 		       vn->is_meta   ? "meta"   : "video");
 	}
+	for (int i = 0; i < pipe->num_subdevs; i++) {
+		const char *dev = pipe->subdevs[i].devnode;
+		printf("  %-30s  %-16s  %-8s  %s\n",
+		       pipe->subdevs[i].name,
+		       dev[0] ? dev : "(unknown)",
+		       "-", "subdev");
+	}
 	printf("\n");
 }
 
@@ -227,6 +300,16 @@ void media_pipeline_close(struct isp_pipeline *pipe)
 		close(pipe->media_fd);
 		pipe->media_fd = -1;
 	}
+}
+
+const char *media_find_subdev(struct isp_pipeline *pipe,
+			      const char *name_substr)
+{
+	for (int i = 0; i < pipe->num_subdevs; i++)
+		if (strstr(pipe->subdevs[i].name, name_substr))
+			return pipe->subdevs[i].devnode[0] ?
+			       pipe->subdevs[i].devnode : NULL;
+	return NULL;
 }
 
 struct isp_vnode *media_find_vnode(struct isp_pipeline *pipe,

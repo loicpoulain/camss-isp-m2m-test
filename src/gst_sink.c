@@ -34,6 +34,7 @@ static const char *fourcc_to_gst(uint32_t fourcc)
 	case V4L2_PIX_FMT_NV16: return "NV16";
 	case V4L2_PIX_FMT_NV61: return "NV61";
 	case V4L2_PIX_FMT_NV24: return "NV24";
+	case V4L2_PIX_FMT_NV42: return "NV24"; /* GStreamer has no NV42; chroma order swapped */
 	case V4L2_PIX_FMT_GREY: return "GRAY8";
 	default:                 return NULL;
 	}

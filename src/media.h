@@ -13,6 +13,7 @@
 #define MAX_PADS      16
 #define MAX_LINKS     64
 #define MAX_VNODES    8
+#define MAX_SUBDEVS   8
 
 /**
  * struct isp_vnode - one video device endpoint found in the pipeline
@@ -40,6 +41,12 @@ struct isp_pipeline {
 	int            media_fd;
 	struct isp_vnode vnodes[MAX_VNODES];
 	int            num_vnodes;
+	struct {
+		uint32_t entity_id;
+		char     name[64];
+		char     devnode[32]; /* /dev/v4l-subdevN */
+	} subdevs[MAX_SUBDEVS];
+	int            num_subdevs;
 };
 
 /**
@@ -67,5 +74,12 @@ void media_pipeline_close(struct isp_pipeline *pipe);
  */
 struct isp_vnode *media_find_vnode(struct isp_pipeline *pipe,
 				   const char *name_substr);
+
+/**
+ * media_find_subdev - find a subdev by name substring
+ * Returns the /dev/v4l-subdevN path or NULL if not found.
+ */
+const char *media_find_subdev(struct isp_pipeline *pipe,
+			      const char *name_substr);
 
 #endif /* CAMSS_TEST_MEDIA_H */
