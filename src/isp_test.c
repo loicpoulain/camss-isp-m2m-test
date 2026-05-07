@@ -263,7 +263,7 @@ static int ope_in_qbuf_dmabuf(struct vnode_ctx *v, unsigned int idx, int dmabuf_
 
 static int vnode_open_and_set_fmt(struct vnode_ctx *v, const char *devnode,
 				  uint32_t type, uint32_t fourcc,
-				  uint32_t width, uint32_t height)
+				  uint32_t width, uint32_t height, uint32_t bpl)
 {
 	struct v4l2_format fmt = {};
 	int ret;
@@ -285,6 +285,8 @@ static int vnode_open_and_set_fmt(struct vnode_ctx *v, const char *devnode,
 	fmt.fmt.pix_mp.width       = width;
 	fmt.fmt.pix_mp.height      = height;
 	fmt.fmt.pix_mp.field       = V4L2_FIELD_NONE;
+	if (bpl)
+		fmt.fmt.pix_mp.plane_fmt[0].bytesperline = bpl;
 
 	ret = ioctl(v->fd, VIDIOC_S_FMT, &fmt);
 	if (ret < 0) {
@@ -561,7 +563,8 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 	/* Open and configure input */
 	if (vnode_open_and_set_fmt(&in_ctx, in_vn->devnode,
 				   V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-				   cfg->input_fmt, cfg->width, cfg->height) < 0)
+				   cfg->input_fmt, cfg->width, cfg->height,
+				   cfg->input_bpl) < 0)
 		goto out;
 
 	if (cfg->framerate && vnode_set_framerate(&in_ctx, cfg->framerate) < 0)
@@ -590,57 +593,61 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 				   V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
 				   cfg->output_fmt,
 				   cfg->output_width  ? cfg->output_width  : cfg->width,
-				   cfg->output_height ? cfg->output_height : cfg->height) < 0)
+				   cfg->output_height ? cfg->output_height : cfg->height,
+				   cfg->output_bpl) < 0)
 		goto out;
 
-	/* Configure disp subdev: set output size and compose placement.
-	 * Pad 0 = sink (pipeline output at crop size, read-only).
-	 * Pad 1 = source (scaled output size).
+	/* Configure ope_proc source: sets scaler output (compose) size.
+	 * Configure ope_disp source: sets compose placement in output buffer.
 	 */
 	{
-		const char *disp_dev = media_find_subdev(pipe, "ope_disp");
-		if (disp_dev) {
-			int disp_fd = open(disp_dev, O_RDWR | O_CLOEXEC);
-			if (disp_fd < 0) {
-				perror("open disp subdev");
+		const char *proc_dev = media_find_subdev(pipe, "ope_proc");
+
+		if (proc_dev) {
+			int proc_fd = open(proc_dev, O_RDWR | O_CLOEXEC);
+			if (proc_fd < 0) {
+				perror("open proc subdev");
 				goto out;
 			}
-			/* Set source pad format = output (compose) size */
+			/* Source pad (pad 2): set scaler output size */
 			struct v4l2_subdev_format sfmt = {
 				.which = V4L2_SUBDEV_FORMAT_ACTIVE,
-				.pad   = 1, /* source */
+				.pad   = 2, /* OPE_PROC_PAD_SOURCE */
 				.format = {
-					.width  = cfg->output_width  ? cfg->output_width  : cfg->width,
-					.height = cfg->output_height ? cfg->output_height : cfg->height,
+					.width  = cfg->compose_width  ? cfg->compose_width
+						: cfg->output_width   ? cfg->output_width  : cfg->width,
+					.height = cfg->compose_height ? cfg->compose_height
+						: cfg->output_height  ? cfg->output_height : cfg->height,
 					.code   = 0x2004, /* MEDIA_BUS_FMT_YUYV8_1X16 */
 					.field  = V4L2_FIELD_NONE,
 				},
 			};
-			if (ioctl(disp_fd, VIDIOC_SUBDEV_S_FMT, &sfmt) < 0)
-				perror("VIDIOC_SUBDEV_S_FMT (disp source)");
+			if (ioctl(proc_fd, VIDIOC_SUBDEV_S_FMT, &sfmt) < 0)
+				perror("VIDIOC_SUBDEV_S_FMT (proc source)");
 			else
-				printf("  Disp output:  %ux%u\n",
+				printf("  Proc output:  %ux%u\n",
 				       sfmt.format.width, sfmt.format.height);
-			/* Set compose placement if requested */
+			/* Set compose rect: scale size + placement in output buffer */
 			if (cfg->compose_width && cfg->compose_height) {
 				struct v4l2_subdev_selection ssel = {
 					.which  = V4L2_SUBDEV_FORMAT_ACTIVE,
-					.pad    = 1, /* source */
+					.pad    = 2, /* OPE_PROC_PAD_SOURCE */
 					.target = V4L2_SEL_TGT_COMPOSE,
 					.r = { .left   = cfg->compose_left,
 					       .top    = cfg->compose_top,
 					       .width  = cfg->compose_width,
 					       .height = cfg->compose_height },
 				};
-				if (ioctl(disp_fd, VIDIOC_SUBDEV_S_SELECTION, &ssel) < 0)
+				if (ioctl(proc_fd, VIDIOC_SUBDEV_S_SELECTION, &ssel) < 0)
 					perror("VIDIOC_SUBDEV_S_SELECTION (compose)");
 				else
-					printf("  Disp compose: %ux%u+%d+%d\n",
+					printf("  Proc compose: %ux%u+%d+%d\n",
 					       ssel.r.width, ssel.r.height,
 					       ssel.r.left, ssel.r.top);
 			}
-			close(disp_fd);
+			close(proc_fd);
 		}
+
 	}
 
 	/* Allocate buffers: depth clamped to [1, MAX_PIPELINE_BUFS] */
@@ -649,7 +656,8 @@ int isp_test_run(struct isp_pipeline *pipe, const struct frame_config *cfg)
 #ifdef HAVE_GSTREAMER
 	if (cfg->gst_pipeline) {
 		gst = gst_sink_open(out_ctx.width, out_ctx.height, cfg->output_fmt,
-				    cfg->framerate, cfg->gst_pipeline);
+				    cfg->framerate, out_ctx.bytesperline,
+				    cfg->gst_pipeline);
 		if (!gst)
 			goto out;
 	}

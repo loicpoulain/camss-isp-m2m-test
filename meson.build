@@ -9,8 +9,9 @@ gst_cargs = []
 gst_sources = []
 gst_dep = dependency('gstreamer-1.0', required : false)
 gst_app_dep = dependency('gstreamer-app-1.0', required : false)
+gst_video_dep = dependency('gstreamer-video-1.0', required : false)
 if gst_dep.found() and gst_app_dep.found()
-  gst_deps = [gst_dep, gst_app_dep]
+  gst_deps = [gst_dep, gst_app_dep, gst_video_dep]
   gst_cargs = ['-DHAVE_GSTREAMER']
   gst_sources = ['src/gst_sink.c']
   message('GStreamer support enabled')

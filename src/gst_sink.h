@@ -19,6 +19,7 @@ struct gst_sink;
  */
 struct gst_sink *gst_sink_open(unsigned int width, unsigned int height,
 			       uint32_t v4l2_fourcc, unsigned int fps,
+			       unsigned int bytesperline,
 			       const char *pipeline_str);
 
 /**

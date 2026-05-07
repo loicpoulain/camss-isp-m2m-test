@@ -49,6 +49,8 @@ struct frame_config {
 	int          compose_left, compose_top;
 	uint32_t     compose_width, compose_height;
 	uint32_t    num_frames;
+	uint32_t    input_bpl;   /* 0 = driver default (width * bpp) */
+	uint32_t    output_bpl;  /* 0 = driver default */
 	const char *input_file;
 	const char *output_file;
 	int          with_params;

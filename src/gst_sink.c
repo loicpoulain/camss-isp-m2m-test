@@ -8,6 +8,7 @@
 
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/video/gstvideometa.h>
 #include <linux/videodev2.h>
 
 #include "gst_sink.h"
@@ -24,6 +25,10 @@ struct gst_sink {
 	uint64_t     last_pts_ns;
 	GAsyncQueue *queue;
 	GThread     *thread;
+	unsigned int width;
+	unsigned int height;
+	unsigned int bytesperline;
+	GstVideoFormat video_format;
 };
 
 static const char *fourcc_to_gst(uint32_t fourcc)
@@ -62,6 +67,7 @@ static gpointer push_thread(gpointer user_data)
 
 struct gst_sink *gst_sink_open(unsigned int width, unsigned int height,
 			       uint32_t v4l2_fourcc, unsigned int fps,
+			       unsigned int bytesperline,
 			       const char *pipeline_str)
 {
 	const char *fmt = fourcc_to_gst(v4l2_fourcc);
@@ -76,7 +82,11 @@ struct gst_sink *gst_sink_open(unsigned int width, unsigned int height,
 	if (!sink)
 		return NULL;
 
-	sink->fps   = fps;
+	sink->fps          = fps;
+	sink->width        = width;
+	sink->height       = height;
+	sink->bytesperline = bytesperline ? bytesperline : width;
+	sink->video_format = gst_video_format_from_string(fmt);
 	sink->queue = g_async_queue_new();
 
 	char caps[256];
@@ -159,6 +169,25 @@ int gst_sink_push(struct gst_sink *sink, const void *data, size_t size,
 		return -1;
 	gst_buffer_fill(buf, 0, data, size);
 	GST_BUFFER_DURATION(buf) = duration;
+
+	/* Attach video meta so GStreamer uses the correct stride */
+	if (sink->video_format != GST_VIDEO_FORMAT_UNKNOWN) {
+		gint strides[GST_VIDEO_MAX_PLANES] = { (gint)sink->bytesperline, 0, 0, 0 };
+		gsize offsets[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
+		GstVideoInfo info;
+		gst_video_info_set_format(&info, sink->video_format,
+					  sink->width, sink->height);
+		/* Set UV plane offset and stride based on format */
+		if (GST_VIDEO_INFO_N_PLANES(&info) > 1) {
+			offsets[1] = (gsize)sink->bytesperline * sink->height;
+			strides[1] = strides[0]; /* UV stride = Y stride for NV* */
+		}
+		gst_buffer_add_video_meta_full(buf, GST_VIDEO_FRAME_FLAG_NONE,
+					       sink->video_format,
+					       sink->width, sink->height,
+					       GST_VIDEO_INFO_N_PLANES(&info),
+					       offsets, strides);
+	}
 
 	struct gst_frame *frame = malloc(sizeof(*frame));
 	if (!frame) {

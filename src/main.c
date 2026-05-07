@@ -61,6 +61,8 @@ static void usage(const char *prog)
 		"  -T <seconds>    Run for a duration instead of frame count\n"
 		"  -d <depth>      Pipeline depth 1..3 (default: 1)\n"
 		"  -r <fps>        Frame rate in fps via VIDIOC_S_PARM\n"
+		"  -b <bpl>        Input bytesperline (0 = driver default)\n"
+		"  -B <bpl>        Output bytesperline (0 = driver default)\n"
 		"  -p              Enqueue params buffer with default ISP tuning\n"
 		"                  Type block.field=value while streaming to update\n"
 		"                  (e.g. wb_gain.g_gain=1200), reset, or help\n"
@@ -118,7 +120,7 @@ int main(int argc, char *argv[])
 	int do_topology = 0;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "eti:I:o:g:s:S:c:C:f:F:n:T:d:r:pP:Rh")) != -1) {
+	while ((opt = getopt(argc, argv, "eti:I:o:g:s:S:c:C:f:F:n:T:d:r:b:B:pP:Rh")) != -1) {
 		switch (opt) {
 		case 'e': do_enum     = 1; break;
 		case 't': do_topology = 1; break;
@@ -187,6 +189,8 @@ int main(int argc, char *argv[])
 		case 'T': cfg.duration_ms = (uint32_t)(atof(optarg) * 1000); break;
 		case 'd': cfg.pipeline_depth = (unsigned int)atoi(optarg); break;
 		case 'r': cfg.framerate      = (unsigned int)atoi(optarg); break;
+		case 'b': cfg.input_bpl      = (uint32_t)atoi(optarg); break;
+		case 'B': cfg.output_bpl     = (uint32_t)atoi(optarg); break;
 		case 'R': cfg.randomize_params = 1; cfg.with_params = 1;   break;
 		case 'p': cfg.with_params = 1; break;
 		case 'P':
